@@ -8,78 +8,10 @@ use std::{
     time::SystemTime,
 };
 
-mod user;
-
+mod server;
 #[cfg(test)]
-mod tests {
-    use std::io::{BufReader, Read};
-
-    use log::debug;
-
-    use super::*;
-
-    #[test]
-    fn test_tls() {
-        // Start a server
-        std::thread::spawn(main);
-
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
-            rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
-                ta.subject,
-                ta.spki,
-                ta.name_constraints,
-            )
-        }));
-
-        let mut reader = BufReader::new(std::fs::File::open("cert.pem").unwrap());
-        let certs = rustls_pemfile::certs(&mut reader).unwrap();
-        root_store.add_parsable_certificates(&certs);
-
-        let config = rustls::ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-
-        let rc_config = Arc::new(config);
-        let host = "localhost".try_into().unwrap();
-
-        let mut client = rustls::ClientConnection::new(rc_config, host).unwrap();
-        let mut socket = TcpStream::connect("localhost:8080").unwrap();
-
-        'c: loop {
-            if client.wants_read() {
-                client.read_tls(&mut socket).unwrap();
-                let state = client.process_new_packets().unwrap();
-
-                if state.peer_has_closed() {
-                    break 'c;
-                }
-
-                if state.plaintext_bytes_to_read() > 0 {
-                    debug!(
-                        "We have {} plaintext bytes to read",
-                        state.plaintext_bytes_to_read()
-                    );
-
-                    let mut buf = vec![0; state.plaintext_bytes_to_read()].into_boxed_slice();
-                    match client.reader().read(&mut buf) {
-                        Ok(n) => {
-                            debug!("Read {n} bytes!");
-                            debug!("Client: {}", String::from_utf8(Vec::from(buf)).unwrap());
-                            client.send_close_notify();
-                        }
-                        Err(err) => error!("{err}"),
-                    }
-                }
-            }
-
-            if client.wants_write() {
-                client.write_tls(&mut socket).unwrap();
-            }
-        }
-    }
-}
+mod tests;
+mod user;
 
 fn process_socket(mut socket: TcpStream, tls_cfg: Arc<ServerConfig>) -> Result<(), std::io::Error> {
     info!("Connection opened from {}", socket.peer_addr()?);
