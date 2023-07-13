@@ -12,8 +12,12 @@ log = "0.4.19"
 humantime = "2.1.0"
 dotenvy = "0.15.7"
 sodiumoxide = "0.2.7"
-rustls = "0.21.3"
+tokio-rustls = "0.24.1"
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal" }
 rcgen = "0.11.1"
 rustls-pemfile = "1.0.3"
 webpki-roots = "0.24.0"
+sqlx = { version = "0.7", features = ["runtime-tokio", "tls-rustls"] }
+tokio = { version = "1", features = ["full"] }
+rmp-serde = "1.1.1"
+hex = "0.4.3"

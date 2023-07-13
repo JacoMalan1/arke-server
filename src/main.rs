@@ -1,58 +1,12 @@
-use log::{error, info, warn};
-use rustls::{Certificate, PrivateKey, ServerConfig, ServerConnection};
-use std::{
-    env,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    sync::Arc,
-    time::SystemTime,
-};
+use log::warn;
+use server::{ArkeServer, ArkeServerConfig};
+use std::{env, net::Ipv4Addr, str::FromStr, time::SystemTime};
+use tokio_rustls::rustls::{Certificate, PrivateKey};
 
 mod server;
 #[cfg(test)]
 mod tests;
 mod user;
-
-fn process_socket(mut socket: TcpStream, tls_cfg: Arc<ServerConfig>) -> Result<(), std::io::Error> {
-    info!("Connection opened from {}", socket.peer_addr()?);
-
-    match ServerConnection::new(tls_cfg) {
-        Ok(mut client) => 's: loop {
-            if client.wants_write() {
-                client.write_tls(&mut socket)?;
-            }
-
-            if client.wants_read() {
-                client.read_tls(&mut socket)?;
-                let state = client.process_new_packets().expect("TLS Error");
-
-                if state.peer_has_closed() {
-                    break 's;
-                }
-
-                if state.plaintext_bytes_to_read() > 0 {
-                    let mut buffer = vec![0; state.plaintext_bytes_to_read()].into_boxed_slice();
-                    client.reader().read_exact(&mut buffer).unwrap();
-
-                    info!(
-                        "Got message: {}",
-                        String::from_utf8(Vec::from(buffer.clone())).unwrap().trim()
-                    );
-
-                    info!(
-                        "Sending message: {}",
-                        String::from_utf8(Vec::from(buffer.clone())).unwrap().trim()
-                    );
-                    client.writer().write_all(&buffer).unwrap();
-                }
-            }
-        },
-        Err(err) => error!("{err:?}"),
-    }
-
-    info!("Connection to {} closed", socket.peer_addr()?);
-    Ok(())
-}
 
 #[cfg(debug_assertions)]
 const LOG_LEVEL: log::LevelFilter = log::LevelFilter::Debug;
@@ -83,7 +37,8 @@ fn setup_logger() -> Result<(), fern::InitError> {
     Ok(())
 }
 
-fn main() -> Result<(), std::io::Error> {
+#[tokio::main]
+async fn main() -> Result<(), std::io::Error> {
     setup_logger().expect("Couldn't setup logger");
 
     if let Err(err) = dotenvy::dotenv() {
@@ -92,9 +47,6 @@ fn main() -> Result<(), std::io::Error> {
 
     let bind_addr = env::var("BIND_ADDRESS").unwrap_or(String::from("127.0.0.1"));
     let bind_port = env::var("BIND_PORT").unwrap_or(String::from("8080"));
-
-    info!("Starting TCP Listener on {bind_addr}:{bind_port}");
-    let listener = TcpListener::bind(format!("{bind_addr}:{bind_port}"))?;
 
     let mut reader = std::io::BufReader::new(
         std::fs::File::open("cert.pem").expect("Couldn't open certificate file"),
@@ -116,17 +68,17 @@ fn main() -> Result<(), std::io::Error> {
         .map(PrivateKey)
         .collect::<Vec<_>>();
 
-    let tls_config: Arc<ServerConfig> = Arc::new(
-        ServerConfig::builder()
-            .with_safe_defaults()
-            .with_no_client_auth()
-            .with_single_cert(certs, private_key.first().expect("No private key").clone())
-            .expect("Couldn't parse certificates"),
-    );
+    let config = ArkeServerConfig::builder()
+        .with_bind_addr(std::net::IpAddr::V4(
+            Ipv4Addr::from_str(&bind_addr).expect("Invalid bind address"),
+        ))
+        .with_bind_port(u16::from_str(&bind_port).expect("Invalid bind port"))
+        .with_certs(certs)
+        .with_private_key(private_key.first().unwrap().clone())
+        .build();
 
-    loop {
-        let cfg = Arc::clone(&tls_config);
-        let (socket, _) = listener.accept()?;
-        std::thread::spawn(move || process_socket(socket, cfg));
-    }
+    let server = ArkeServer::new(config)
+        .await
+        .expect("Couldn't create server");
+    server.start().await
 }
