@@ -42,30 +42,18 @@ impl ArkeServer {
             let mut buffer = [0; 4096];
             let n = stream.read(&mut buffer).await?;
 
-            debug!("Received message: {}", hex::encode(&buffer[..n]));
-
             match serde_json::from_slice::<ArkeCommand>(&buffer[..n]) {
                 Ok(command) => {
                     debug!("Received command: {command:?}");
-                    match command.ty {
-                        ArkeCommandType::Goodbye => {
-                            Self::send_command(
-                                &mut stream,
-                                ArkeCommand::new(ArkeCommandType::Goodbye, None),
-                            )
-                            .await?;
+                    match command {
+                        ArkeCommand::Goodbye => {
+                            Self::send_command(&mut stream, ArkeCommand::Goodbye).await?;
                             break 'connection;
                         }
-                        ArkeCommandType::Hello => {
+                        ArkeCommand::Hello(payload) => {
                             Self::send_command(
                                 &mut stream,
-                                ArkeCommand::new(
-                                    ArkeCommandType::Hello,
-                                    Some(format!(
-                                        "Hello {}",
-                                        command.payload.unwrap_or("".to_string())
-                                    )),
-                                ),
+                                ArkeCommand::Hello(format!("Hello {payload}")),
                             )
                             .await?;
                         }
@@ -73,11 +61,7 @@ impl ArkeServer {
                 }
                 Err(err) => {
                     error!("Invalid command. {err:?}");
-                    Self::send_command(
-                        &mut stream,
-                        ArkeCommand::new(ArkeCommandType::Goodbye, None),
-                    )
-                    .await?;
+                    Self::send_command(&mut stream, ArkeCommand::Goodbye).await?;
                     break 'connection;
                 }
             }
@@ -94,7 +78,6 @@ impl ArkeServer {
         command: ArkeCommand,
     ) -> Result<usize, tokio::io::Error> {
         let msg = serde_json::to_vec(&command).expect("Couldn't serialize message");
-        debug!("Sending message: {}", hex::encode(&msg));
         debug!("Sending command: {command:?}");
         stream.write(&msg).await
     }
@@ -176,22 +159,9 @@ impl ArkeServerConfigBuilder {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum ArkeCommandType {
-    Hello,
-    Goodbye,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArkeCommand {
-    #[serde(rename = "type")]
-    pub ty: ArkeCommandType,
-    pub payload: Option<String>,
-}
-
-impl ArkeCommand {
-    pub fn new(ty: ArkeCommandType, payload: Option<String>) -> Self {
-        Self { ty, payload }
-    }
+#[non_exhaustive]
+pub enum ArkeCommand {
+    Hello(String),
+    Goodbye,
 }

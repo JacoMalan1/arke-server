@@ -59,7 +59,10 @@ async fn main() -> Result<(), std::io::Error> {
         .expect("Couldn't read private key!")
         .into_iter()
         .map(PrivateKey)
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+        .first()
+        .expect("No private key")
+        .clone();
 
     let config = ArkeServerConfig::builder()
         .with_bind_addr(std::net::IpAddr::V4(
@@ -67,11 +70,12 @@ async fn main() -> Result<(), std::io::Error> {
         ))
         .with_bind_port(u16::from_str(&bind_port).expect("Invalid bind port"))
         .with_certs(certs)
-        .with_private_key(private_key.first().unwrap().clone())
+        .with_private_key(private_key)
         .build();
 
     let server = ArkeServer::new(config)
         .await
         .expect("Couldn't create server");
+
     server.start().await
 }
