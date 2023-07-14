@@ -26,13 +26,6 @@ fn setup_logger() -> Result<(), fern::InitError> {
         })
         .level(LOG_LEVEL)
         .chain(std::io::stdout())
-        .chain(fern::log_file(format!(
-            "/var/log/alan/alan_log_{}.log",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        ))?)
         .apply()?;
     Ok(())
 }
