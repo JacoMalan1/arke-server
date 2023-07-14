@@ -44,7 +44,7 @@ impl ArkeServer {
 
             debug!("Received message: {}", hex::encode(&buffer[..n]));
 
-            match rmp_serde::from_slice::<ArkeCommand>(&buffer[..n]) {
+            match serde_json::from_slice::<ArkeCommand>(&buffer[..n]) {
                 Ok(command) => {
                     debug!("Received command: {command:?}");
                     match command.ty {
@@ -93,7 +93,7 @@ impl ArkeServer {
         stream: &mut TlsStream<TcpStream>,
         command: ArkeCommand,
     ) -> Result<usize, tokio::io::Error> {
-        let msg = rmp_serde::to_vec(&command).expect("Couldn't serialize message");
+        let msg = serde_json::to_vec(&command).expect("Couldn't serialize message");
         debug!("Sending message: {}", hex::encode(&msg));
         debug!("Sending command: {command:?}");
         stream.write(&msg).await
