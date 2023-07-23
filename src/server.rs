@@ -1,6 +1,10 @@
+use async_trait::async_trait;
+use libsignal_protocol::PrivateKey;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::{
+    marker::PhantomData,
+    mem::Discriminant,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
 };
@@ -57,6 +61,7 @@ impl ArkeServer {
                             )
                             .await?;
                         }
+                        ArkeCommand::CreateUser => {}
                     }
                 }
                 Err(err) => {
@@ -163,5 +168,40 @@ impl ArkeServerConfigBuilder {
 #[non_exhaustive]
 pub enum ArkeCommand {
     Hello(String),
+    CreateUser,
     Goodbye,
+}
+
+#[allow(dead_code)]
+pub struct Conversation<'a, S: Clone, H: ConversationHandler<S>> {
+    expecting: Vec<Discriminant<ArkeCommand>>,
+    tls_stream: &'a mut TlsStream<TcpStream>,
+    handler: H,
+    state: S,
+}
+
+#[allow(dead_code)]
+impl<'a, S: Clone, H: ConversationHandler<S>> Conversation<'a, S, H> {
+    pub fn new(
+        expecting: Vec<Discriminant<ArkeCommand>>,
+        handler: H,
+        stream: &'a mut TlsStream<TcpStream>,
+        state_init: Box<dyn Fn() -> S>,
+    ) -> Self {
+        Self {
+            expecting,
+            handler,
+            state: state_init(),
+            tls_stream: stream,
+        }
+    }
+
+    pub async fn start(self) {}
+}
+
+#[async_trait]
+pub trait ConversationHandler<S: Clone> {
+    type Error;
+    type Output;
+    async fn handle(self, command: ArkeCommand) -> Result<Self::Output, Self::Error>;
 }

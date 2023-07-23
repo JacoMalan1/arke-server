@@ -1,6 +1,6 @@
 use log::warn;
-use server::{ArkeServer, ArkeServerConfig};
-use std::{env, net::Ipv4Addr, str::FromStr, time::SystemTime};
+use server::{ArkeCommand, ArkeServer, ArkeServerConfig, ConversationHandler};
+use std::{env, net::Ipv4Addr, str::FromStr, sync::Arc, time::SystemTime};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 
 mod server;
@@ -28,6 +28,14 @@ fn setup_logger() -> Result<(), fern::InitError> {
         .chain(std::io::stdout())
         .apply()?;
     Ok(())
+}
+
+use macros::conversation_handler;
+use std::clone::Clone;
+
+#[conversation_handler(state = "_some_state", next = some_other_handler)]
+async fn some_function(_some_state: String, _command: ArkeCommand) -> Result<String, ()> {
+    Ok("world".to_string())
 }
 
 #[tokio::main]
