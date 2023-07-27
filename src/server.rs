@@ -1,9 +1,7 @@
 use async_trait::async_trait;
-use libsignal_protocol::PrivateKey;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::{
-    marker::PhantomData,
     mem::Discriminant,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
@@ -202,6 +200,5 @@ impl<'a, S: Clone, H: ConversationHandler<S>> Conversation<'a, S, H> {
 #[async_trait]
 pub trait ConversationHandler<S: Clone> {
     type Error;
-    type Output;
-    async fn handle(self, command: ArkeCommand) -> Result<Self::Output, Self::Error>;
+    async fn handle(&mut self, command: ArkeCommand) -> Result<ArkeCommand, Self::Error>;
 }

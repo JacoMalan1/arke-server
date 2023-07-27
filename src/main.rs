@@ -33,9 +33,12 @@ fn setup_logger() -> Result<(), fern::InitError> {
 use macros::conversation_handler;
 use std::clone::Clone;
 
-#[conversation_handler(state = "_some_state", next = some_other_handler)]
-async fn some_function(_some_state: String, _command: ArkeCommand) -> Result<String, ()> {
-    Ok("world".to_string())
+#[conversation_handler(state = "_some_state", command(ArkeCommand::Hello(_), std::memory))]
+async fn some_function(
+    _some_state: String,
+    command: ArkeCommand,
+) -> Result<ArkeCommand, &'static str> {
+    Ok(ArkeCommand::Hello(format!("Hello")))
 }
 
 #[tokio::main]
@@ -84,6 +87,13 @@ async fn main() -> Result<(), std::io::Error> {
     let server = ArkeServer::new(config)
         .await
         .expect("Couldn't create server");
+
+    let f = some_function::new(String::new())
+        .handle(ArkeCommand::Goodbye("Android".to_string()))
+        .await
+        .unwrap();
+
+    println!("f: {f:?}");
 
     server.start().await
 }
