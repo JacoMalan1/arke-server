@@ -1,12 +1,7 @@
 use log::warn;
-use server::{ArkeCommand, ArkeServer, ArkeServerConfig, ConversationHandler};
-use std::{env, net::Ipv4Addr, str::FromStr, sync::Arc, time::SystemTime};
+use arke_api::server::{ArkeCommand, ArkeServer, ArkeServerConfig, CommandError};
+use std::{env, net::Ipv4Addr, str::FromStr, time::SystemTime};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
-
-mod server;
-#[cfg(test)]
-mod tests;
-mod user;
 
 #[cfg(debug_assertions)]
 const LOG_LEVEL: log::LevelFilter = log::LevelFilter::Debug;
@@ -31,14 +26,29 @@ fn setup_logger() -> Result<(), fern::InitError> {
 }
 
 use macros::conversation_handler;
-use std::clone::Clone;
 
-#[conversation_handler(state = "_some_state", command(ArkeCommand::Hello(_), std::memory))]
+macro_rules! routes {
+    ( $($k: expr => $v: ident),* ) => {{
+        let mut map = std::collections::HashMap::new();
+        $({
+            let value: Box<dyn arke_api::server::ConversationHandler<_>> = Box::new($v::new(String::new()));
+            map.insert($k as u32, value);
+        })*
+        map
+    }};
+}
+
+#[conversation_handler(state = "_some_state", command(
+    ArkeCommand::Hello(msg), 
+    CommandError::ServerError { 
+        msg: "Unacceptable command".to_string() 
+    }
+))]
 async fn some_function(
     _some_state: String,
     command: ArkeCommand,
-) -> Result<ArkeCommand, &'static str> {
-    Ok(ArkeCommand::Hello(format!("Hello")))
+) -> Result<ArkeCommand, CommandError> {
+    Ok(ArkeCommand::Hello(format!("Hello {msg}")))
 }
 
 #[tokio::main]
@@ -82,18 +92,15 @@ async fn main() -> Result<(), std::io::Error> {
         .with_bind_port(u16::from_str(&bind_port).expect("Invalid bind port"))
         .with_certs(certs)
         .with_private_key(private_key)
+        .handlers(routes![
+            ArkeCommand::Hello => some_function
+        ])
         .build();
 
+    
     let server = ArkeServer::new(config)
         .await
         .expect("Couldn't create server");
-
-    let f = some_function::new(String::new())
-        .handle(ArkeCommand::Goodbye("Android".to_string()))
-        .await
-        .unwrap();
-
-    println!("f: {f:?}");
 
     server.start().await
 }

@@ -1,11 +1,8 @@
-use std::str::FromStr;
-
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{
-    parse::Parse, parse_macro_input, punctuated::Punctuated, DeriveInput, Expr, ExprLit, FnArg,
-    GenericArgument, Ident, Item, Lit, MetaNameValue, Pat, PatType, Path, PathArguments,
-    ReturnType, Token, Type, TypePath, ExprStruct,
+    parse::Parse, parse_macro_input, punctuated::Punctuated, 
+    Expr, ExprLit, FnArg, Ident, Item, Lit, Pat, PatType, Token, Type, 
 };
 
 struct ConversationHandlerInput {
@@ -28,34 +25,36 @@ struct MatchPattern {
     pat: syn::Pat
 }
 
+impl ToTokens for MatchPattern {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        self.pat.to_tokens(tokens)
+    }
+}
+
 impl Parse for MatchPattern {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         Ok(Self { pat: syn::Pat::parse_single(input)? })
     }
 }
 
-enum CommandPatternArg {
-    MatchPattern(MatchPattern),
-    ErrorExpression(Expr)
-}
-
-impl Parse for CommandPatternArg {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        if let Some(pat) = MatchPattern::parse(input).ok() {
-            Ok(CommandPatternArg::MatchPattern(pat))
-        } else {
-            Ok(CommandPatternArg::ErrorExpression(Expr::parse(input)?))
-        }
-    }
-}
-
 struct CommandPatternArgs {
-    args: Punctuated<CommandPatternArg, Token![,]>
+    data: (MatchPattern, Expr)
+}
+
+impl Into<(MatchPattern, Expr)> for CommandPatternArgs {
+    fn into(self) -> (MatchPattern, Expr) {
+        self.data
+    }
 }
 
 impl Parse for CommandPatternArgs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        Ok(Self { args: Punctuated::<CommandPatternArg, Token![,]>::parse_terminated(input)? })
+        let mut args = Punctuated::<Expr, Token![,]>::parse_terminated(input)?.into_iter();
+        let first = syn::parse2(args.next().unwrap().into_token_stream())?;
+        let second = syn::parse2(args.next().unwrap().into_token_stream())?;
+        Ok(Self {
+            data: (first, second)
+        })
     }
 }
 
@@ -68,40 +67,6 @@ pub fn conversation_handler(args: TokenStream, annotated_item: TokenStream) -> T
         (fun.vis, fun.sig.ident.clone(), fun.block, fun.sig)
     } else {
         panic!("Macro can only be used to annotate function items")
-    };
-
-    let (_, error_type) = if let ReturnType::Type(_, ty) = sig.output {
-        if let Type::Path(TypePath {
-            path: Path { segments, .. },
-            ..
-        }) = *ty.clone()
-        {
-            if segments.last().unwrap().ident != "Result" {
-                panic!("Must return a result");
-            }
-            let last_segment = segments.last().unwrap().arguments.clone();
-            if let PathArguments::AngleBracketed(path_args) = last_segment {
-                let return_type = if let GenericArgument::Type(ty) = path_args.args.first().unwrap()
-                {
-                    ty.clone()
-                } else {
-                    panic!("Must have type as first generic argument");
-                };
-                let error_type = if let GenericArgument::Type(ty) = path_args.args.last().unwrap() {
-                    ty.clone()
-                } else {
-                    panic!("Must have type as last generic argument");
-                };
-
-                (return_type, error_type)
-            } else {
-                panic!("Must have angle-bracketed args");
-            }
-        } else {
-            panic!("Return type must be a path")
-        }
-    } else {
-        panic!("Function must have a return type")
     };
 
     let mut state_ident = None;
@@ -124,28 +89,20 @@ pub fn conversation_handler(args: TokenStream, annotated_item: TokenStream) -> T
         }
         if let syn::Meta::List(list) = arg {
             if list.path.segments.last().unwrap().ident == "command" {
-                let args = syn::parse2::<CommandPatternArgs>(list.tokens).unwrap().args;
-                if args.len() != 2 {
-                    panic!("Expected two arguments for `command`");
-                }
-
-                let first = args.first().unwrap();
-                let second = args.last().unwrap();
-
-                if let CommandPatternArg::MatchPattern(pat) = first {
-                    pattern = Some(pat.pat.clone())
-                } else {
-                    panic!("First argument must be a pattern");
-                }
-
-                if let CommandPatternArg::ErrorExpression(expr) = second {
-                    error_lit = Some(expr.clone())
-                } else {
-                    panic!("Second argument must be an expression");
+                match syn::parse2::<CommandPatternArgs>(list.tokens.clone()) {
+                    Ok(args) => {
+                        pattern = Some(args.data.0.into_token_stream());
+                        error_lit = Some(args.data.1.into_token_stream());
+                    },
+                    Err(err) => {
+                        pattern = Some(err.clone().into_compile_error());
+                        error_lit = Some(err.into_compile_error());
+                    }
                 }
             }
         }
     });
+    
     let mut state_ident = state_ident.expect("Missing 'state' argument");
     let pattern = pattern.expect("Missing 'pattern' argument");
     let error_lit = error_lit.expect("Missing command mismatch error");
@@ -176,7 +133,7 @@ pub fn conversation_handler(args: TokenStream, annotated_item: TokenStream) -> T
         }
     });
     let state_type = state_type.expect("Couldn't determine state type");
-    let new_ident = Ident::new(format!("{}_generated", sig.ident).as_ref(), sig.ident.span());
+    let new_ident = Ident::new(format!("__{}_generated", sig.ident).as_ref(), sig.ident.span());
 
     let block = block.stmts;
     quote! {
@@ -194,14 +151,13 @@ pub fn conversation_handler(args: TokenStream, annotated_item: TokenStream) -> T
         }
 
         #[async_trait::async_trait]
-        impl crate::server::ConversationHandler<#state_type> for #ident {
-            type Error = #error_type;
-            async fn handle(&mut self, command: crate::server::ArkeCommand) -> Result<crate::server::ArkeCommand, Self::Error> {
+        impl arke_api::server::ConversationHandler<#state_type> for #ident {
+            async fn handle(&mut self, command: arke_api::server::ArkeCommand) -> Result<arke_api::server::ArkeCommand, arke_api::server::CommandError> {
                 Ok(#new_ident(&mut self.state, command).await?)
             }
         }
         
-        #vis async fn #new_ident(#state_ident: &mut #state_type, #command_ident: crate::server::ArkeCommand) -> Result<crate::server::ArkeCommand, #error_type> {
+        #vis async fn #new_ident(#state_ident: &mut #state_type, #command_ident: arke_api::server::ArkeCommand) -> Result<arke_api::server::ArkeCommand, arke_api::server::CommandError> {
             match #command_ident {
                 #pattern => {
                     let #state_ident = #state_ident;
