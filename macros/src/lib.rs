@@ -151,19 +151,19 @@ pub fn conversation_handler(args: TokenStream, annotated_item: TokenStream) -> T
         }
 
         #[async_trait::async_trait]
-        impl arke_api::server::ConversationHandler<#state_type> for #ident {
-            async fn handle(&mut self, command: arke_api::server::ArkeCommand) -> Result<arke_api::server::ArkeCommand, arke_api::server::CommandError> {
-                Ok(#new_ident(&mut self.state, command).await?)
+        impl arke::server::command::CommandHandler for #ident {
+            async fn handle(&mut self, command: arke::server::command::ArkeCommand) -> arke::server::command::ArkeCommand {
+                #new_ident(&mut self.state, command).await
             }
         }
         
-        #vis async fn #new_ident(#state_ident: &mut #state_type, #command_ident: arke_api::server::ArkeCommand) -> Result<arke_api::server::ArkeCommand, arke_api::server::CommandError> {
+        #vis async fn #new_ident(#state_ident: &mut #state_type, #command_ident: arke::server::command::ArkeCommand) -> arke::server::command::ArkeCommand {
             match #command_ident {
                 #pattern => {
                     let #state_ident = #state_ident;
                     #(#block)*
                 },
-                _ => Err(#error_lit)
+                _ => #error_lit
             }
         }
     }

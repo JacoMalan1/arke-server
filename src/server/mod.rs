@@ -1,6 +1,7 @@
-use async_trait::async_trait;
+pub mod command;
+
+use command::{ArkeCommand, CommandHandler};
 use log::{debug, error, info};
-use serde::{Deserialize, Serialize};
 use std::{
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
@@ -12,33 +13,45 @@ use tokio::{
 };
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 
-pub struct ArkeServer<S: Clone> {
+pub struct ArkeServer {
     listener: TcpListener,
     certs: Vec<rustls::Certificate>,
     private_key: rustls::PrivateKey,
-    handlers: HashMap<u32, Box<dyn ConversationHandler<S>>>,
+    handlers: HashMap<u8, Box<dyn CommandHandler>>,
 }
 
-impl<S: Clone> ArkeServer<S> {
-    pub async fn new(config: ArkeServerConfig<S>) -> Result<Self, std::io::Error> {
-        info!(
-            "Arke server will bind to {}:{}",
-            config.bind_addr, config.bind_port
-        );
+impl ArkeServer {
+    pub fn builder() -> ArkeServerBuilder {
+        ArkeServerBuilder {
+            bind_port: 8080,
+            bind_addr: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            certs: vec![],
+            private_key: None,
+            handlers: None,
+        }
+    }
 
+    pub async fn new(
+        bind_port: u16,
+        bind_addr: IpAddr,
+        certs: Vec<rustls::Certificate>,
+        private_key: rustls::PrivateKey,
+        handlers: HashMap<u8, Box<dyn CommandHandler>>,
+    ) -> Result<Self, tokio::io::Error> {
+        let bind_addr = format!("{}:{}", bind_addr, bind_port);
+        info!("Server will listen on tcp://{bind_addr}");
         Ok(Self {
-            listener: TcpListener::bind(format!("{}:{}", config.bind_addr, config.bind_port))
-                .await?,
-            certs: config.certs,
-            private_key: config.private_key,
-            handlers: config.handlers,
+            listener: TcpListener::bind(bind_addr).await?,
+            certs,
+            private_key,
+            handlers,
         })
     }
 
     async fn handle_connection(
         stream: TcpStream,
         acceptor: TlsAcceptor,
-        handlers: Arc<Mutex<HashMap<u32, Box<dyn ConversationHandler<S>>>>>,
+        handlers: Arc<Mutex<HashMap<u8, Box<dyn CommandHandler>>>>,
     ) -> Result<(), tokio::io::Error> {
         let peer_addr = stream.peer_addr()?;
         let mut stream = acceptor.accept(stream).await?;
@@ -49,7 +62,10 @@ impl<S: Clone> ArkeServer<S> {
 
             match serde_json::from_slice::<ArkeCommand>(&buffer[..n]) {
                 Ok(command) => {
-                    debug!("Received command: {command:?}");
+                    debug!(
+                        "Received command with discriminant: {}",
+                        command.discriminant()
+                    );
 
                     let mut handlers = handlers.lock().await;
                     let handler = handlers.get_mut(&command.discriminant());
@@ -58,7 +74,12 @@ impl<S: Clone> ArkeServer<S> {
                         .handle(command)
                         .await;
 
-                    Self::send_command(&mut stream, result.unwrap()).await?;
+                    if let ArkeCommand::Goodbye(err) = result {
+                        log::info!("Sending Goodbye(Error = {err:?}) for connection {peer_addr}");
+                        break 'connection;
+                    } else {
+                        Self::send_command(&mut stream, result).await?;
+                    }
                 }
                 Err(err) => {
                     error!("Invalid command. {err:?}");
@@ -78,15 +99,13 @@ impl<S: Clone> ArkeServer<S> {
         stream: &mut TlsStream<TcpStream>,
         command: ArkeCommand,
     ) -> Result<usize, tokio::io::Error> {
-        let msg = serde_json::to_vec(&command).expect("Couldn't serialize message");
+        let mut msg = serde_json::to_vec(&command).expect("Couldn't serialize message");
+        msg.push("\n".as_bytes()[0]);
         debug!("Sending command: {command:?}");
         stream.write(&msg).await
     }
 
-    pub async fn start(self) -> Result<(), tokio::io::Error>
-    where
-        S: 'static,
-    {
+    pub async fn start(self) -> Result<(), tokio::io::Error> {
         let config = Arc::new(
             rustls::ServerConfig::builder()
                 .with_safe_defaults()
@@ -109,36 +128,16 @@ impl<S: Clone> ArkeServer<S> {
     }
 }
 
-pub struct ArkeServerConfig<S: Clone> {
-    pub bind_port: u16,
-    pub bind_addr: IpAddr,
-    pub certs: Vec<rustls::Certificate>,
-    pub private_key: rustls::PrivateKey,
-    handlers: HashMap<u32, Box<dyn ConversationHandler<S>>>,
-}
-
-impl<S: Clone> ArkeServerConfig<S> {
-    pub fn builder() -> ArkeServerConfigBuilder<S> {
-        ArkeServerConfigBuilder {
-            bind_port: 8080,
-            bind_addr: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            certs: Vec::new(),
-            private_key: None,
-            handlers: None,
-        }
-    }
-}
-
 use std::collections::HashMap;
-pub struct ArkeServerConfigBuilder<S: Clone> {
+pub struct ArkeServerBuilder {
     bind_port: u16,
     bind_addr: IpAddr,
     certs: Vec<rustls::Certificate>,
     private_key: Option<rustls::PrivateKey>,
-    handlers: Option<HashMap<u32, Box<dyn ConversationHandler<S>>>>,
+    handlers: Option<HashMap<u8, Box<dyn CommandHandler>>>,
 }
 
-impl<S: Clone> ArkeServerConfigBuilder<S> {
+impl ArkeServerBuilder {
     pub fn with_certs(mut self, certs: Vec<rustls::Certificate>) -> Self {
         self.certs = certs;
         self
@@ -159,45 +158,19 @@ impl<S: Clone> ArkeServerConfigBuilder<S> {
         self
     }
 
-    pub fn build(self) -> ArkeServerConfig<S> {
-        ArkeServerConfig {
-            bind_port: self.bind_port,
-            private_key: self.private_key.unwrap(),
-            certs: self.certs,
-            bind_addr: self.bind_addr,
-            handlers: self.handlers.unwrap(),
-        }
+    pub async fn build(self) -> Result<ArkeServer, tokio::io::Error> {
+        Ok(ArkeServer::new(
+            self.bind_port,
+            self.bind_addr,
+            self.certs,
+            self.private_key.unwrap(),
+            self.handlers.unwrap(),
+        )
+        .await?)
     }
 
-    pub fn handlers(mut self, handlers: HashMap<u32, Box<dyn ConversationHandler<S>>>) -> Self {
+    pub fn handlers(mut self, handlers: HashMap<u8, Box<dyn CommandHandler>>) -> Self {
         self.handlers = Some(handlers);
         self
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-#[serde(tag = "type", content = "payload")]
-#[repr(u32)]
-pub enum ArkeCommand {
-    Hello(String) = 0,
-    CreateUser,
-    Goodbye(Option<CommandError>),
-}
-
-impl ArkeCommand {
-    pub fn discriminant(&self) -> u32 {
-        unsafe { *<*const _>::from(self).cast::<u32>() }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "payload")]
-pub enum CommandError {
-    ServerError { msg: String },
-}
-
-#[async_trait]
-pub trait ConversationHandler<S: Clone>: Send {
-    async fn handle(&mut self, command: ArkeCommand) -> Result<ArkeCommand, CommandError>;
 }

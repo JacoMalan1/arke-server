@@ -1,5 +1,6 @@
+use arke::server::{command::ArkeCommand, ArkeServer};
 use log::warn;
-use arke_api::server::{ArkeCommand, ArkeServer, ArkeServerConfig, CommandError};
+use macros::conversation_handler;
 use std::{env, net::Ipv4Addr, str::FromStr, time::SystemTime};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 
@@ -25,30 +26,39 @@ fn setup_logger() -> Result<(), fern::InitError> {
     Ok(())
 }
 
-use macros::conversation_handler;
+#[derive(Clone)]
+struct State {
+    hostname: String,
+}
+use arke::server::command::CommandError;
 
-macro_rules! routes {
-    ( $($k: expr => $v: ident),* ) => {{
-        let mut map = std::collections::HashMap::new();
-        $({
-            let value: Box<dyn arke_api::server::ConversationHandler<_>> = Box::new($v::new(String::new()));
-            map.insert($k as u32, value);
-        })*
-        map
-    }};
+#[conversation_handler(
+    state = "state",
+    command(
+        ArkeCommand::Hello(client_name), 
+        CommandError::ServerError { 
+            msg: "Invalid command".to_string() 
+        }.into()
+    )
+)]
+async fn hello(state: State, command: ArkeCommand) -> ArkeCommand {
+    ArkeCommand::Hello(format!(
+        "Hello {client_name}, my name is {}",
+        state.hostname
+    ))
 }
 
-#[conversation_handler(state = "_some_state", command(
-    ArkeCommand::Hello(msg), 
-    CommandError::ServerError { 
-        msg: "Unacceptable command".to_string() 
-    }
-))]
-async fn some_function(
-    _some_state: String,
-    command: ArkeCommand,
-) -> Result<ArkeCommand, CommandError> {
-    Ok(ArkeCommand::Hello(format!("Hello {msg}")))
+#[conversation_handler(
+    state = "_state",
+    command(
+        ArkeCommand::Goodbye(_),
+        CommandError::ServerError {
+            msg: "Invalid command".to_string()
+        }.into()
+    )
+)]
+async fn goodbye(_state: State, command: ArkeCommand) -> ArkeCommand {
+    ArkeCommand::Goodbye(None)
 }
 
 #[tokio::main]
@@ -85,22 +95,21 @@ async fn main() -> Result<(), std::io::Error> {
         .expect("No private key")
         .clone();
 
-    let config = ArkeServerConfig::builder()
+    let server = ArkeServer::builder()
         .with_bind_addr(std::net::IpAddr::V4(
             Ipv4Addr::from_str(&bind_addr).expect("Invalid bind address"),
         ))
         .with_bind_port(u16::from_str(&bind_port).expect("Invalid bind port"))
         .with_certs(certs)
         .with_private_key(private_key)
-        .handlers(routes![
-            ArkeCommand::Hello => some_function
-        ])
-        .build();
-
-    
-    let server = ArkeServer::new(config)
+        .handlers(arke::routes! {
+            State { hostname: "localhost".to_string() },
+            ArkeCommand::Hello => hello,
+            ArkeCommand::Goodbye => goodbye
+        })
+        .build()
         .await
-        .expect("Couldn't create server");
+        .expect("Couldn't build server!");
 
     server.start().await
 }
