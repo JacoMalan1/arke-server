@@ -1,13 +1,15 @@
+use crate::user::NewUser;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(tag = "type", content = "payload")]
 #[repr(u8)]
 pub enum ArkeCommand {
     Hello(String) = 0,
-    CreateUser,
+    CreateUser(NewUser),
+    Success,
     Goodbye(Option<CommandError>),
 }
 

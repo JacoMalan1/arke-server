@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{
     parse::Parse, parse_macro_input, punctuated::Punctuated, 
-    Expr, ExprLit, FnArg, Ident, Item, Lit, Pat, PatType, Token, Type, 
+    Expr, ExprLit, FnArg, Ident, Item, Lit, Pat, PatType, Token, Type, DeriveInput, DataStruct, Data, 
 };
 
 struct ConversationHandlerInput {
@@ -59,7 +59,7 @@ impl Parse for CommandPatternArgs {
 }
 
 #[proc_macro_attribute]
-pub fn conversation_handler(args: TokenStream, annotated_item: TokenStream) -> TokenStream {
+pub fn command_handler(args: TokenStream, annotated_item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as ConversationHandlerInput).args;
     let annotated_item = parse_macro_input!(annotated_item as Item);
 
@@ -139,13 +139,13 @@ pub fn conversation_handler(args: TokenStream, annotated_item: TokenStream) -> T
     quote! {
         #[allow(non_camel_case_types)]
         #vis struct #ident {
-            state: #state_type
+            state: std::sync::Arc<tokio::sync::Mutex<#state_type>>
         }
 
         impl #ident {
-            pub fn new(state: #state_type) -> Self {
+            pub fn new(state: std::sync::Arc<tokio::sync::Mutex<#state_type>>) -> Self {
                 Self {
-                    state: state
+                    state
                 }
             }
         }
@@ -153,14 +153,14 @@ pub fn conversation_handler(args: TokenStream, annotated_item: TokenStream) -> T
         #[async_trait::async_trait]
         impl arke::server::command::CommandHandler for #ident {
             async fn handle(&mut self, command: arke::server::command::ArkeCommand) -> arke::server::command::ArkeCommand {
-                #new_ident(&mut self.state, command).await
+                #new_ident(std::sync::Arc::clone(&self.state), command).await
             }
         }
         
-        #vis async fn #new_ident(#state_ident: &mut #state_type, #command_ident: arke::server::command::ArkeCommand) -> arke::server::command::ArkeCommand {
+        #vis async fn #new_ident(#state_ident: std::sync::Arc<tokio::sync::Mutex<#state_type>>, #command_ident: arke::server::command::ArkeCommand) -> arke::server::command::ArkeCommand {
             match #command_ident {
                 #pattern => {
-                    let #state_ident = #state_ident;
+                    let mut #state_ident = #state_ident.lock().await;
                     #(#block)*
                 },
                 _ => #error_lit
@@ -168,4 +168,36 @@ pub fn conversation_handler(args: TokenStream, annotated_item: TokenStream) -> T
         }
     }
     .into()
+}
+
+#[proc_macro_derive(Entity)]
+pub fn derive_entity(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    let (ident, fields) = if let DeriveInput { ident, data: Data::Struct(DataStruct { fields, .. }), .. } = input {
+        (ident, fields.into_iter().map(|f| f.ident.unwrap()))
+    } else {
+        panic!("Entity can only be derived on structs");
+    };
+
+    let fields_str = fields.clone().map(|f| f.to_string()).reduce(|acc, f| {
+        format!("{acc},{f}")
+    }).unwrap();
+
+    let q_marks = fields.clone().map(|_| "?".to_string()).reduce(|acc, q| format!("{acc},{q}")).unwrap();
+    
+    let query = format!("INSERT INTO {}({}) VALUES ({})", ident.to_string().to_lowercase(), fields_str, q_marks);
+        
+    let insert = quote! {
+        async fn insert(&self, db: &sqlx::mysql::MySqlPool) -> std::result::Result<sqlx::mysql::MySqlQueryResult, sqlx::Error> {
+            sqlx::query!(#query, #(self.#fields),*).execute(db).await
+        }
+    };
+
+    quote! {
+        #[async_trait::async_trait]
+        impl crate::server::db::Entity for #ident {
+            #insert
+        }
+    }.into()
 }

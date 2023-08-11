@@ -1,8 +1,9 @@
-use arke::server::{command::ArkeCommand, ArkeServer};
+use arke::{server::{command::ArkeCommand, ArkeServer, db::Entity}, user::User};
 use log::warn;
-use macros::conversation_handler;
-use std::{env, net::Ipv4Addr, str::FromStr, time::SystemTime};
+use macros::command_handler;
+use std::{env, net::Ipv4Addr, str::FromStr, time::SystemTime, sync::Arc};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
+use tokio::sync::Mutex;
 
 #[cfg(debug_assertions)]
 const LOG_LEVEL: log::LevelFilter = log::LevelFilter::Debug;
@@ -29,10 +30,11 @@ fn setup_logger() -> Result<(), fern::InitError> {
 #[derive(Clone)]
 struct State {
     hostname: String,
+    db: sqlx::mysql::MySqlPool,
 }
 use arke::server::command::CommandError;
 
-#[conversation_handler(
+#[command_handler(
     state = "state",
     command(
         ArkeCommand::Hello(client_name), 
@@ -48,7 +50,24 @@ async fn hello(state: State, command: ArkeCommand) -> ArkeCommand {
     ))
 }
 
-#[conversation_handler(
+#[command_handler(state = "state", command(
+    ArkeCommand::CreateUser(new_user), 
+    CommandError::ServerError {
+        msg: "Invalid command".to_string()
+    }.into()
+))]
+async fn create_user(state: State, command: ArkeCommand) -> ArkeCommand {
+    if let Err(err) = User::from(new_user).insert(&state.db).await {
+        log::error!("Couldn't create new user: {err:?}");
+        CommandError::ServerError {
+            msg: "Couldn't create new user!".to_string()
+        }.into()
+    } else {
+        ArkeCommand::Success
+    }
+}
+
+#[command_handler(
     state = "_state",
     command(
         ArkeCommand::Goodbye(_),
@@ -95,6 +114,9 @@ async fn main() -> Result<(), std::io::Error> {
         .expect("No private key")
         .clone();
 
+    let pool = sqlx::mysql::MySqlPool::connect(env::var("DATABASE_URL").unwrap().as_ref()).await.unwrap();
+
+    let state = Arc::new(Mutex::new(State { hostname: "localhost".to_string(), db: pool }));
     let server = ArkeServer::builder()
         .with_bind_addr(std::net::IpAddr::V4(
             Ipv4Addr::from_str(&bind_addr).expect("Invalid bind address"),
@@ -103,8 +125,9 @@ async fn main() -> Result<(), std::io::Error> {
         .with_certs(certs)
         .with_private_key(private_key)
         .handlers(arke::routes! {
-            State { hostname: "localhost".to_string() },
+            Arc::clone(&state),
             ArkeCommand::Hello => hello,
+            ArkeCommand::CreateUser => create_user,
             ArkeCommand::Goodbye => goodbye
         })
         .build()

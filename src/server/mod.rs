@@ -1,4 +1,5 @@
 pub mod command;
+pub mod db;
 
 use command::{ArkeCommand, CommandHandler};
 use log::{debug, error, info};
