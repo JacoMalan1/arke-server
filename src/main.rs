@@ -1,12 +1,9 @@
+use arke::{server::{command::ArkeCommand, ArkeServer, db::Entity}, user::User};
 use log::warn;
-use server::{ArkeServer, ArkeServerConfig};
-use std::{env, net::Ipv4Addr, str::FromStr, time::SystemTime};
+use macros::command_handler;
+use std::{env, net::Ipv4Addr, str::FromStr, time::SystemTime, sync::Arc};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
-
-mod server;
-#[cfg(test)]
-mod tests;
-mod user;
+use tokio::sync::Mutex;
 
 #[cfg(debug_assertions)]
 const LOG_LEVEL: log::LevelFilter = log::LevelFilter::Debug;
@@ -26,15 +23,61 @@ fn setup_logger() -> Result<(), fern::InitError> {
         })
         .level(LOG_LEVEL)
         .chain(std::io::stdout())
-        .chain(fern::log_file(format!(
-            "/var/log/alan/alan_log_{}.log",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        ))?)
         .apply()?;
     Ok(())
+}
+
+#[derive(Clone)]
+struct State {
+    hostname: String,
+    db: sqlx::mysql::MySqlPool,
+}
+use arke::server::command::CommandError;
+
+#[command_handler(
+    state = "state",
+    command(
+        ArkeCommand::Hello(client_name), 
+        CommandError::ServerError { 
+            msg: "Invalid command".to_string() 
+        }.into()
+    )
+)]
+async fn hello(state: State, command: ArkeCommand) -> ArkeCommand {
+    ArkeCommand::Hello(format!(
+        "Hello {client_name}, my name is {}",
+        state.hostname
+    ))
+}
+
+#[command_handler(state = "state", command(
+    ArkeCommand::CreateUser(new_user), 
+    CommandError::ServerError {
+        msg: "Invalid command".to_string()
+    }.into()
+))]
+async fn create_user(state: State, command: ArkeCommand) -> ArkeCommand {
+    if let Err(err) = User::from(new_user).insert(&state.db).await {
+        log::error!("Couldn't create new user: {err:?}");
+        CommandError::ServerError {
+            msg: "Couldn't create new user!".to_string()
+        }.into()
+    } else {
+        ArkeCommand::Success
+    }
+}
+
+#[command_handler(
+    state = "_state",
+    command(
+        ArkeCommand::Goodbye(_),
+        CommandError::ServerError {
+            msg: "Invalid command".to_string()
+        }.into()
+    )
+)]
+async fn goodbye(_state: State, command: ArkeCommand) -> ArkeCommand {
+    ArkeCommand::Goodbye(None)
 }
 
 #[tokio::main]
@@ -66,19 +109,30 @@ async fn main() -> Result<(), std::io::Error> {
         .expect("Couldn't read private key!")
         .into_iter()
         .map(PrivateKey)
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+        .first()
+        .expect("No private key")
+        .clone();
 
-    let config = ArkeServerConfig::builder()
+    let pool = sqlx::mysql::MySqlPool::connect(env::var("DATABASE_URL").unwrap().as_ref()).await.unwrap();
+
+    let state = Arc::new(Mutex::new(State { hostname: "localhost".to_string(), db: pool }));
+    let server = ArkeServer::builder()
         .with_bind_addr(std::net::IpAddr::V4(
             Ipv4Addr::from_str(&bind_addr).expect("Invalid bind address"),
         ))
         .with_bind_port(u16::from_str(&bind_port).expect("Invalid bind port"))
         .with_certs(certs)
-        .with_private_key(private_key.first().unwrap().clone())
-        .build();
-
-    let server = ArkeServer::new(config)
+        .with_private_key(private_key)
+        .handlers(arke::routes! {
+            Arc::clone(&state),
+            ArkeCommand::Hello => hello,
+            ArkeCommand::CreateUser => create_user,
+            ArkeCommand::Goodbye => goodbye
+        })
+        .build()
         .await
-        .expect("Couldn't create server");
+        .expect("Couldn't build server!");
+
     server.start().await
 }
