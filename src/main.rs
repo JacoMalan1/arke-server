@@ -1,5 +1,6 @@
-use arke::{server::{command::ArkeCommand, ArkeServer, db::Entity}, user::User};
+use arke::{server::{command::{ArkeHello, ArkeCommand}, ArkeServer, db::Entity}, user::User};
 use log::warn;
+use arke::server::{state::State, command::CommandError};
 use macros::command_handler;
 use std::{env, net::Ipv4Addr, str::FromStr, time::SystemTime, sync::Arc};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
@@ -27,27 +28,25 @@ fn setup_logger() -> Result<(), fern::InitError> {
     Ok(())
 }
 
-#[derive(Clone)]
-struct State {
-    hostname: String,
-    db: sqlx::mysql::MySqlPool,
-}
-use arke::server::command::CommandError;
-
 #[command_handler(
     state = "state",
     command(
-        ArkeCommand::Hello(client_name), 
+        ArkeCommand::Hello(ArkeHello { version: (major, minor, _patch) }), 
         CommandError::ServerError { 
             msg: "Invalid command".to_string() 
         }.into()
     )
 )]
 async fn hello(state: State, command: ArkeCommand) -> ArkeCommand {
-    ArkeCommand::Hello(format!(
-        "Hello {client_name}, my name is {}",
-        state.hostname
-    ))
+    let hello = ArkeHello::default();
+    let (server_major, server_minor, _) = hello.version; 
+    
+    if server_major != major || server_minor != minor {
+        CommandError::ServerError { msg: "Server and client have a version mismatch!".to_string() }.into()
+    } else {
+        state.handshake = true;
+        ArkeCommand::Hello(hello)
+    }
 }
 
 #[command_handler(state = "state", command(
@@ -116,7 +115,7 @@ async fn main() -> Result<(), std::io::Error> {
 
     let pool = sqlx::mysql::MySqlPool::connect(env::var("DATABASE_URL").unwrap().as_ref()).await.unwrap();
 
-    let state = Arc::new(Mutex::new(State { hostname: "localhost".to_string(), db: pool }));
+    let state = Arc::new(Mutex::new(State::new("localhost", pool)));
     let server = ArkeServer::builder()
         .with_bind_addr(std::net::IpAddr::V4(
             Ipv4Addr::from_str(&bind_addr).expect("Invalid bind address"),
