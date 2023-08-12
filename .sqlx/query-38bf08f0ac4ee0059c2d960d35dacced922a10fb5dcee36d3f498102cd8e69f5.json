@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "INSERT INTO user(username,identity_key,signed_prekey,prekey_signature) VALUES (?,?,?,?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "38bf08f0ac4ee0059c2d960d35dacced922a10fb5dcee36d3f498102cd8e69f5"
+}

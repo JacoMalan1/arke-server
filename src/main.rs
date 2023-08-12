@@ -2,6 +2,7 @@ use arke::{server::{command::{ArkeHello, ArkeCommand}, ArkeServer, db::Entity}, 
 use log::warn;
 use arke::server::{state::State, command::CommandError};
 use macros::command_handler;
+use openssl::ec::EcKey;
 use std::{env, net::Ipv4Addr, str::FromStr, time::SystemTime, sync::Arc};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 use tokio::sync::Mutex;
@@ -56,6 +57,21 @@ async fn hello(state: State, command: ArkeCommand) -> ArkeCommand {
     }.into()
 ))]
 async fn create_user(state: State, command: ArkeCommand) -> ArkeCommand {
+    let identity_key = if let Ok(key) = EcKey::public_key_from_pem(&new_user.identity_key) {
+        key
+    } else {
+        return ArkeCommand::Error(CommandError::InvalidKey);
+    };
+    
+    if let Ok(sig) = openssl::ecdsa::EcdsaSig::from_der(&new_user.prekey_signature) {
+        if let Ok(true) = sig.verify(&new_user.signed_prekey, identity_key.as_ref()) {
+        } else {
+            return ArkeCommand::Error(CommandError::InvalidSignature { msg: "Prekey signature is invalid".to_string() }).into();
+        }
+    } else {
+        return ArkeCommand::Error(CommandError::InvalidSignature { msg: "Prekey signature is invalid".to_string() }).into();
+    }
+    
     if let Err(err) = User::from(new_user).insert(&state.db).await {
         log::error!("Couldn't create new user: {err:?}");
         CommandError::ServerError {

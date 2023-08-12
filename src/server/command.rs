@@ -32,6 +32,7 @@ pub enum ArkeCommand {
     CreateUser(NewUser) = 1,
     Success = 2,
     Goodbye(Option<CommandError>) = 3,
+    Error(CommandError) = 4,
 }
 
 impl ArkeCommand {
@@ -44,6 +45,8 @@ impl ArkeCommand {
 #[serde(tag = "type", content = "payload")]
 pub enum CommandError {
     ServerError { msg: String },
+    InvalidSignature { msg: String },
+    InvalidKey,
 }
 
 impl Into<ArkeCommand> for CommandError {
