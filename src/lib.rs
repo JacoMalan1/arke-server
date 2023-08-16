@@ -1,3 +1,4 @@
+pub mod crypto;
 pub mod server;
 pub mod tests;
 pub mod user;
