@@ -1,19 +1,21 @@
 use macros::Entity;
 use serde::{Deserialize, Serialize};
 
+use crate::crypto::PublicKey;
+
 #[derive(Entity)]
 pub struct User {
     pub username: String,
-    pub identity_key: Vec<u8>,
-    pub signed_prekey: Vec<u8>,
+    pub identity_key: PublicKey,
+    pub signed_prekey: PublicKey,
     pub prekey_signature: Vec<u8>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct NewUser {
     pub username: String,
-    pub identity_key: Vec<u8>,
-    pub signed_prekey: Vec<u8>,
+    pub identity_key: PublicKey,
+    pub signed_prekey: PublicKey,
     pub prekey_signature: Vec<u8>,
 }
 

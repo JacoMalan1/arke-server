@@ -57,14 +57,14 @@ async fn hello(state: State, command: ArkeCommand) -> ArkeCommand {
     }.into()
 ))]
 async fn create_user(state: State, command: ArkeCommand) -> ArkeCommand {
-    let identity_key = if let Ok(key) = EcKey::public_key_from_pem(&new_user.identity_key) {
+    let identity_key = if let Ok(key) = new_user.identity_key.ec_key() {
         key
     } else {
         return ArkeCommand::Error(CommandError::InvalidKey);
     };
     
     if let Ok(sig) = openssl::ecdsa::EcdsaSig::from_der(&new_user.prekey_signature) {
-        if let Ok(true) = sig.verify(&new_user.signed_prekey, identity_key.as_ref()) {
+        if let Ok(true) = sig.verify(new_user.signed_prekey.as_ref(), identity_key.as_ref()) {
         } else {
             return ArkeCommand::Error(CommandError::InvalidSignature { msg: "Prekey signature is invalid".to_string() }).into();
         }
