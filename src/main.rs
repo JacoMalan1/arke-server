@@ -50,6 +50,16 @@ async fn hello(state: State, command: ArkeCommand) -> ArkeCommand {
     }
 }
 
+#[command_handler(state = "_state", command(
+    ArkeCommand::InsertPrekeys(_keys),
+    CommandError::ServerError {
+        msg: "Invalid command".to_string()
+    }.into()
+))]
+async fn insert_prekeys(_state: State, command: ArkeCommand) -> ArkeCommand {
+    unimplemented!();
+}
+
 #[command_handler(state = "state", command(
     ArkeCommand::CreateUser(new_user), 
     CommandError::ServerError {
