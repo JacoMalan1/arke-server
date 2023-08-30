@@ -33,6 +33,7 @@ pub enum ArkeCommand {
     Success = 2,
     Goodbye(Option<CommandError>) = 3,
     Error(CommandError) = 4,
+    InsertPrekeys(Vec<crate::crypto::PublicKey>) = 5,
 }
 
 impl ArkeCommand {

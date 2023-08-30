@@ -28,7 +28,7 @@ pub struct PrivateKey {
 
 impl PrivateKey {
     pub async fn generate() -> Result<(PrivateKey, PublicKey), openssl::error::ErrorStack> {
-        let ec_key = tokio::task::spawn_blocking(|| PKey::generate_ed25519())
+        let ec_key = tokio::task::spawn_blocking(|| PKey::generate_x25519())
             .await
             .expect("Couldn't join key generation thread")?
             .ec_key()?;
